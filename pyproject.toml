@@ -1,0 +1,17 @@
+[project]
+name = "egnn-binding-affinity-prediction"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "biopython>=1.87",
+    "madrax",
+    "numpy>=2.2.6",
+    "torch>=2.12.1",
+    "torch-geometric>=2.8.0",
+    "transformers>=5.12.1",
+]
+
+[tool.uv.sources]
+madrax = { git = "https://bitbucket.org/grogdrinker/madrax/" }
