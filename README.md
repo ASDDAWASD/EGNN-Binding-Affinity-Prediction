@@ -4,17 +4,17 @@
 
 You can generate the Tier 1 synthetic dataset using `generate_tcr_pmhc_dataset.py`. Make sure your environment has PyTorch, BioPython, and pandas. Place your STCRDab PDB files in the `stcrdab_structures/` folder.
 
-#5-Sample Dry Run
+5-Sample Dry Run
 ```bash
 python generate_tcr_pmhc_dataset.py --limit 5 --output dry_run_tcr_pmhc_dataset.csv
 ```
 
-#Full Run
+Full Run
 ```bash
 nohup python generate_tcr_pmhc_dataset.py --output tcr_pmhc_interface_ddg.csv > dataset_generation.log 2>&1 &
 ```
 
-#Custom Directory Targeting
+Custom Directory Targeting
 ```bash
 python generate_tcr_pmhc_dataset.py --pdb_dir custom_pdb_batch_1/ --output batch_1_ddg.csv
 ```
