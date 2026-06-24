@@ -1,34 +1,27 @@
 # Thermodynamics Prediction via EGNNs
 
-This project aims to predict the binding affinity thermodynamics ($\Delta\Delta G$) of protein-protein interactions using E(n)-Equivariant Graph Neural Networks (EGNNs) and the `madrax` force field.
-
-## Project Pivot: TCR-pMHC Interactions
-The core focus of the pipeline has shifted from generic Protein-Protein Interactions (PPIs) to strictly **T-Cell Receptor (TCR) – pMHC interactions**. We use 3D structures from the Structural T-Cell Receptor Database (STCRDab) and perform in silico Deep Mutational Scanning (DMS) using a 10 Ångstrom interface radius around the CDR loops.
-
 ## Generating the TCR-pMHC Dataset
 
 You can generate the Tier 1 synthetic dataset using `generate_tcr_pmhc_dataset.py`. Make sure your environment has PyTorch, BioPython, and pandas. Place your STCRDab PDB files in the `stcrdab_structures/` folder.
 
-### 5-Sample Dry Run
-Use a limit block to test your setup and visually inspect the CSV output:
+#5-Sample Dry Run
 ```bash
 python generate_tcr_pmhc_dataset.py --limit 5 --output dry_run_tcr_pmhc_dataset.csv
 ```
 
-### Full Run
-Processes the complete dataset. Run this via `nohup` if you are executing remotely:
+#Full Run
 ```bash
 nohup python generate_tcr_pmhc_dataset.py --output tcr_pmhc_interface_ddg.csv > dataset_generation.log 2>&1 &
 ```
 
-### Custom Directory Targeting
+#Custom Directory Targeting
 ```bash
 python generate_tcr_pmhc_dataset.py --pdb_dir custom_pdb_batch_1/ --output batch_1_ddg.csv
 ```
 
 ---
 
-## Legacy Pipelines (Generic PPIs)
+## Previous Pipelines (Generic PPIs)
 
 The repository also includes the legacy script `synthetic_ppi_dataset.py`.
 
