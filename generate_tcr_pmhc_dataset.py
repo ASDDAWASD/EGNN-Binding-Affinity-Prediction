@@ -43,6 +43,8 @@ import numpy as np
 import torch
 from Bio.PDB import NeighborSearch, PDBIO, PDBParser, Select, Selection
 from torch.utils.data import DataLoader, Dataset
+from tqdm.auto import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 try:
     from madrax.ForceField import ForceField
@@ -359,55 +361,67 @@ def process_job(
     written = 0
     batch_size = mutation_batch_size
     pending = list(flat_jobs)
-    while pending:
-        batch = pending[:batch_size]
-        directives = [item[2] for item in batch]
-        try:
-            ddg_values = run_mutation_batch(coords, atom_names, directives, force_field, device)
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            if batch_size <= 1:
-                LOGGER.error("OOM on %s even at batch size 1; skipping remaining mutants.", job.pdb_id)
-                failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": "CUDA OOM at batch size 1"})
-                pending = pending[1:]
+    progress = tqdm(
+        total=len(flat_jobs),
+        desc=f"Mutations {job.pdb_id}",
+        unit="mut",
+        leave=False,
+    )
+    try:
+        while pending:
+            batch = pending[:batch_size]
+            directives = [item[2] for item in batch]
+            try:
+                ddg_values = run_mutation_batch(coords, atom_names, directives, force_field, device)
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                if batch_size <= 1:
+                    LOGGER.error("OOM on %s even at batch size 1; skipping remaining mutants.", job.pdb_id)
+                    failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": "CUDA OOM at batch size 1"})
+                    pending = pending[1:]
+                    progress.update(1)
+                    continue
+                batch_size = max(1, batch_size // 2)
+                LOGGER.warning("CUDA OOM on %s; reducing mutation batch size to %d and retrying.", job.pdb_id, batch_size)
                 continue
-            batch_size = max(1, batch_size // 2)
-            LOGGER.warning("CUDA OOM on %s; reducing mutation batch size to %d and retrying.", job.pdb_id, batch_size)
-            continue
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.error("MadraX forward pass failed for %s batch starting at %s: %s", job.pdb_id, directives[0], exc)
-            failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": f"forward pass failure: {exc}"})
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.error("MadraX forward pass failed for %s batch starting at %s: %s", job.pdb_id, directives[0], exc)
+                failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": f"forward pass failure: {exc}"})
+                pending = pending[len(batch) :]
+                progress.update(len(batch))
+                continue
+
+            for (target, mutant_aa, _directive), ddg_tensor in zip(batch, ddg_values):
+                ddg = float(ddg_tensor.item())
+                if not np.isfinite(ddg) or abs(ddg) > clash_threshold:
+                    LOGGER.warning(
+                        "Severe steric clash for %s %s%d %s->%s (ddG=%s); filtering out.",
+                        job.pdb_id, target.chain, target.resnum, target.wt_aa, mutant_aa, ddg,
+                    )
+                    failure_log.writerow(
+                        {"PDB_ID": job.pdb_id, "Reason": f"clash at {target.chain}{target.resnum}{target.wt_aa}->{mutant_aa} (ddG={ddg})"}
+                    )
+                    continue
+                writer.writerow(
+                    {
+                        "PDB_ID": job.pdb_id,
+                        "Chain": target.chain,
+                        "Residue_Position": target.resnum,
+                        "WT_Amino_Acid": target.wt_aa,
+                        "Mutant_Amino_Acid": mutant_aa,
+                        "Distance_to_CDR_center": round(target.distance_to_cdr, 3),
+                        "MadraX_ddG": round(ddg, 4),
+                    }
+                )
+                written += 1
+
             pending = pending[len(batch) :]
-            continue
-
-        for (target, mutant_aa, _directive), ddg_tensor in zip(batch, ddg_values):
-            ddg = float(ddg_tensor.item())
-            if not np.isfinite(ddg) or abs(ddg) > clash_threshold:
-                LOGGER.warning(
-                    "Severe steric clash for %s %s%d %s->%s (ddG=%s); filtering out.",
-                    job.pdb_id, target.chain, target.resnum, target.wt_aa, mutant_aa, ddg,
-                )
-                failure_log.writerow(
-                    {"PDB_ID": job.pdb_id, "Reason": f"clash at {target.chain}{target.resnum}{target.wt_aa}->{mutant_aa} (ddG={ddg})"}
-                )
-                continue
-            writer.writerow(
-                {
-                    "PDB_ID": job.pdb_id,
-                    "Chain": target.chain,
-                    "Residue_Position": target.resnum,
-                    "WT_Amino_Acid": target.wt_aa,
-                    "Mutant_Amino_Acid": mutant_aa,
-                    "Distance_to_CDR_center": round(target.distance_to_cdr, 3),
-                    "MadraX_ddG": round(ddg, 4),
-                }
-            )
-            written += 1
-
-        pending = pending[len(batch) :]
-        del ddg_values
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+            progress.update(len(batch))
+            del ddg_values
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+    finally:
+        progress.close()
 
     return written
 
@@ -491,15 +505,16 @@ def main() -> None:
         if failure_write_header:
             failure_writer.writeheader()
 
-        for i, job in enumerate(loader):
-            LOGGER.info("[%d/%d] Processing %s (%d interface residues)", i + 1, len(dataset), job.pdb_id, len(job.targets))
-            written = process_job(job, force_field, device, args.mutation_batch_size, args.clash_threshold, writer, failure_writer)
-            total_written += written
-            out_f.flush()
-            fail_f.flush()
-            done_f.write(job.pdb_id + "\n")
-            done_f.flush()
-            LOGGER.info("%s -> %d ddG points (running total: %d)", job.pdb_id, written, total_written)
+        with logging_redirect_tqdm():
+            for i, job in enumerate(tqdm(loader, total=len(dataset), desc="Structures", unit="pdb")):
+                LOGGER.info("[%d/%d] Processing %s (%d interface residues)", i + 1, len(dataset), job.pdb_id, len(job.targets))
+                written = process_job(job, force_field, device, args.mutation_batch_size, args.clash_threshold, writer, failure_writer)
+                total_written += written
+                out_f.flush()
+                fail_f.flush()
+                done_f.write(job.pdb_id + "\n")
+                done_f.flush()
+                LOGGER.info("%s -> %d ddG points (running total: %d)", job.pdb_id, written, total_written)
 
     LOGGER.info("Successfully generated %d synthetic ddG points.", total_written)
     LOGGER.info("Results written to %s (failures logged to %s).", output_csv, failure_log_path)

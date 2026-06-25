@@ -10,8 +10,20 @@ dependencies = [
     "numpy>=2.2.6",
     "torch>=2.12.1",
     "torch-geometric>=2.8.0",
+    "tqdm>=4.68.3",
     "transformers>=5.12.1",
 ]
 
 [tool.uv.sources]
 madrax = { git = "https://bitbucket.org/grogdrinker/madrax/" }
+torch = [
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
