@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import argparse
 import csv
 import logging
@@ -157,14 +158,14 @@ def prepare_dockground_pool(cache_dir: Path, max_candidates: int = 20) -> List[P
     return candidates
 
 
-    def prepare_seed_structure(seed_pdb: str, cache_dir: Path) -> Path:
-        seed_path = Path(seed_pdb)
-        if seed_path.exists():
-            return seed_path
-        structure_dir = ensure_dir(cache_dir / "structures")
-        destination = structure_dir / f"{seed_pdb.lower()}.pdb"
-        url = f"https://files.rcsb.org/download/{seed_pdb.upper()}.pdb"
-        return download_file(url, destination)
+def prepare_seed_structure(seed_pdb: str, cache_dir: Path) -> Path:
+    seed_path = Path(seed_pdb)
+    if seed_path.exists():
+        return seed_path
+    structure_dir = ensure_dir(cache_dir / "structures")
+    destination = structure_dir / f"{seed_pdb.lower()}.pdb"
+    url = f"https://files.rcsb.org/download/{seed_pdb.upper()}.pdb"
+    return download_file(url, destination)
 
 
 def strip_hetatm(source_path: Path, destination_path: Path) -> Path:
