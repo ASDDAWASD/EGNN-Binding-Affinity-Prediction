@@ -9,6 +9,7 @@ dependencies = [
     "madrax",
     "numpy>=2.2.6",
     "requests>=2.31",
+    "pandas>=2.3.3",
     "torch>=2.12.1",
     "torch-geometric>=2.8.0",
     "tqdm>=4.68.3",
