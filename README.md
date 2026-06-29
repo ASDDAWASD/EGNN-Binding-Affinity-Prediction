@@ -72,8 +72,4 @@ python rosetta_flex/merge_results.py
 ```
 Graphinity's published Flex ddG data is antibody–antigen and is used only as a
 *protocol* reference, not as labels.
-
----
-`synthetic_ppi_dataset.py` is a **deprecated** legacy generic-PPI generator
-(MadraX + ESM2 → PyG graphs), kept for reference only — not part of the current pipeline.
 </content>
