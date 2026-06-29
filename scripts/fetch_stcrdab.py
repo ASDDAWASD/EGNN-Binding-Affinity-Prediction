@@ -17,10 +17,18 @@ MHC allele + TCR genes), keeping the best-resolution representative of each
 cluster, rather than the aggressive ~283-structure sequence-identity pruning a
 benchmarking study would use.
 
+Separately -- and independently of that light clustering -- we hard-exclude any
+PDB that appears in the ATLAS or TRAIT benchmarks to prevent train/test leakage.
+ATLAS and TRAIT are evaluation sets, so a structure used to *generate* synthetic
+ddG labels here must never be one we later benchmark against. The exclusion is on
+by default via the shipped ``benchmark_blocklist.txt`` (``--exclude_pdbs``; pass
+an empty string to disable).
+
 Pipeline
 --------
 1. Download the STCRDab summary table (one row per PDB/complex).
 2. Keep alpha/beta TCRs bound to a peptide + MHC, below a resolution cutoff.
+   Drop any PDB listed in the ATLAS/TRAIT benchmark blocklist (leakage guard).
 3. Cluster on a redundancy key and keep one representative per cluster.
 4. Download each representative's IMGT-numbered PDB from STCRDab.
 5. Remap the original chain letters (read from the summary row) to A/B/C/D/E
@@ -92,6 +100,28 @@ def pick(row: Dict[str, str], key: str) -> str:
     return ""
 
 
+def load_exclude_list(path: Optional[str]) -> set:
+    """Load a newline-delimited PDB-ID blocklist (``#`` comment lines ignored).
+
+    Used to hard-exclude benchmark structures (ATLAS/TRAIT) so they never enter
+    the training-label set. Returns an empty set if ``path`` is falsy or missing.
+    """
+    if not path:
+        LOGGER.warning("No exclusion list given; proceeding with NO benchmark leakage guard.")
+        return set()
+    p = Path(path)
+    if not p.exists():
+        LOGGER.warning("Exclusion list %s not found; proceeding with NO benchmark leakage guard.", path)
+        return set()
+    ids = set()
+    for line in p.read_text().splitlines():
+        line = line.strip().lower()
+        if line and not line.startswith("#"):
+            ids.add(line.split()[0])
+    LOGGER.info("Loaded %d benchmark PDB IDs to exclude from %s", len(ids), path)
+    return ids
+
+
 def download_summary(url: str, session: requests.Session) -> List[Dict[str, str]]:
     LOGGER.info("Downloading STCRDab summary from %s", url)
     resp = session.get(url, timeout=120)
@@ -144,9 +174,21 @@ def resolution_value(row: Dict[str, str]) -> float:
         return 99.0  # de-prioritize unknown-resolution structures as representatives
 
 
-def select_representatives(rows: List[Dict[str, str]], max_resolution: float) -> List[Dict[str, str]]:
+def select_representatives(
+    rows: List[Dict[str, str]],
+    max_resolution: float,
+    exclude: Optional[set] = None,
+) -> List[Dict[str, str]]:
+    exclude = exclude or set()
     candidates = [r for r in rows if is_abtcr_pmhc(r, max_resolution)]
     LOGGER.info("%d/%d rows are alpha/beta TCR-pMHC within resolution cutoff.", len(candidates), len(rows))
+    if exclude:
+        kept = [r for r in candidates if pick(r, "pdb").lower() not in exclude]
+        LOGGER.info(
+            "Benchmark leakage guard: excluded %d ATLAS/TRAIT structures; %d candidates remain.",
+            len(candidates) - len(kept), len(kept),
+        )
+        candidates = kept
     best: Dict[str, Dict[str, str]] = {}
     for row in candidates:
         key = redundancy_key(row)
@@ -248,6 +290,13 @@ def main() -> None:
     ap.add_argument("--out_dir", type=str, default="stcrdab_structures/", help="Where standardized PDBs are written.")
     ap.add_argument("--max_structures", type=int, default=None, help="Cap on number of structures to download (omit for all).")
     ap.add_argument("--max_resolution", type=float, default=3.5, help="Drop structures worse than this resolution (A).")
+    ap.add_argument(
+        "--exclude_pdbs",
+        type=str,
+        default=str(Path(__file__).resolve().parent / "benchmark_blocklist.txt"),
+        help="Newline-delimited PDB IDs to hard-exclude to prevent train/test leakage "
+             "(default: the shipped ATLAS/TRAIT benchmark_blocklist.txt; pass '' to disable).",
+    )
     ap.add_argument("--summary_url", type=str, default=DEFAULT_SUMMARY_URL)
     ap.add_argument("--structure_url", type=str, default=DEFAULT_STRUCTURE_URL, help="Template with a {pdb} placeholder.")
     ap.add_argument("--manifest", type=str, default=None, help="Manifest CSV path. Defaults to <out_dir>/manifest.csv.")
@@ -271,8 +320,9 @@ def main() -> None:
     session = requests.Session()
     session.headers.update({"User-Agent": "tcr-pmhc-ddg-pipeline/0.1"})
 
+    exclude = load_exclude_list(args.exclude_pdbs)
     rows = download_summary(args.summary_url, session)
-    reps = select_representatives(rows, args.max_resolution)
+    reps = select_representatives(rows, args.max_resolution, exclude)
 
     done = load_done(manifest_path) if args.resume else set()
     if done:
