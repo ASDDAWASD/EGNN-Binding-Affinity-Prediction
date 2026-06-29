@@ -1,0 +1,157 @@
+=== [Thu Jun 25 07:06:56 PM EDT 2026] STEP 1: rm -rf .venv ===
+=== [Thu Jun 25 07:08:08 PM EDT 2026] STEP 2: uv cache clear ===
+Clearing cache at: /home/khandesh/.cache/uv
+Removed 70475 files (17.6GiB)
+=== [Thu Jun 25 07:12:26 PM EDT 2026] STEP 3: uv sync ===
+Using CPython 3.10.20
+Creating virtual environment at: .venv
+Resolved 78 packages in 4ms
+   Updating https://bitbucket.org/grogdrinker/madrax/ (HEAD)
+Downloading triton (188.4MiB)
+Downloading sympy (6.0MiB)
+Downloading networkx (1.6MiB)
+Downloading hf-xet (4.3MiB)
+Downloading biopython (3.1MiB)
+Downloading nvidia-cudnn-cu12 (674.0MiB)
+Downloading aiohttp (1.6MiB)
+Downloading transformers (10.6MiB)
+Downloading numpy (16.0MiB)
+Downloading pygments (1.2MiB)
+Downloading nvidia-cuda-cupti-cu12 (8.5MiB)
+Downloading tokenizers (3.1MiB)
+Downloading torch-geometric (1.3MiB)
+Downloading nvidia-nvshmem-cu12 (132.7MiB)
+Downloading nvidia-nvjitlink-cu12 (18.8MiB)
+Downloading nvidia-cusparse-cu12 (206.5MiB)
+Downloading nvidia-cublas-cu12 (374.9MiB)
+Downloading nvidia-nccl-cu12 (276.3MiB)
+Downloading setuptools (1.0MiB)
+Downloading cuda-bindings (7.3MiB)
+Downloading nvidia-cufile-cu12 (1.1MiB)
+Downloading nvidia-curand-cu12 (53.7MiB)
+Downloading nvidia-cusparselt-cu12 (273.9MiB)
+Downloading nvidia-cufft-cu12 (190.9MiB)
+Downloading nvidia-cuda-nvrtc-cu12 (22.6MiB)
+Downloading nvidia-cusolver-cu12 (150.9MiB)
+Downloading torch (804.3MiB)
+ Downloaded nvidia-cufile-cu12
+ Downloaded aiohttp
+ Downloaded pygments
+    Updated https://bitbucket.org/grogdrinker/madrax/ (bd247bdabd26c68c578c6da18b5c939e6bf847bf)
+   Building madrax @ git+https://bitbucket.org/grogdrinker/madrax/@bd247bdabd26c68c578c6da18b5c939e6bf847bf
+ Downloaded setuptools
+ Downloaded tokenizers
+ Downloaded networkx
+ Downloaded torch-geometric
+ Downloaded hf-xet
+ Downloaded biopython
+ Downloaded cuda-bindings
+ Downloaded nvidia-cuda-cupti-cu12
+ Downloaded numpy
+ Downloaded nvidia-nvjitlink-cu12
+ Downloaded nvidia-cuda-nvrtc-cu12
+ Downloaded sympy
+ Downloaded nvidia-curand-cu12
+ Downloaded transformers
+      Built madrax @ git+https://bitbucket.org/grogdrinker/madrax/@bd247bdabd26c68c578c6da18b5c939e6bf847bf
+ Downloaded nvidia-nvshmem-cu12
+ Downloaded nvidia-cusolver-cu12
+ Downloaded nvidia-cufft-cu12
+ Downloaded nvidia-cusparse-cu12
+ Downloaded triton
+ Downloaded nvidia-nccl-cu12
+ Downloaded nvidia-cusparselt-cu12
+ Downloaded nvidia-cublas-cu12
+ Downloaded nvidia-cudnn-cu12
+ Downloaded torch
+Prepared 72 packages in 2m 54s
+Installed 72 packages in 23.72s
+ + aiohappyeyeballs==2.6.2
+ + aiohttp==3.14.1
+ + aiosignal==1.4.0
+ + annotated-doc==0.0.4
+ + anyio==4.14.1
+ + async-timeout==5.0.1
+ + attrs==26.1.0
+ + biopython==1.87
+ + certifi==2026.6.17
+ + charset-normalizer==3.4.7
+ + click==8.4.2
+ + cuda-bindings==12.9.7
+ + cuda-pathfinder==1.5.5
+ + cuda-toolkit==12.6.3
+ + exceptiongroup==1.3.1
+ + filelock==3.29.4
+ + frozenlist==1.8.0
+ + fsspec==2026.6.0
+ + h11==0.16.0
+ + hf-xet==1.5.1
+ + httpcore==1.0.9
+ + httpx==0.28.1
+ + huggingface-hub==1.21.0
+ + idna==3.18
+ + jinja2==3.1.6
+ + madrax==0.0.5 (from git+https://bitbucket.org/grogdrinker/madrax/@bd247bdabd26c68c578c6da18b5c939e6bf847bf)
+ + markdown-it-py==4.2.0
+ + markupsafe==3.0.3
+ + mdurl==0.1.2
+ + mpmath==1.3.0
+ + multidict==6.7.1
+ + networkx==3.4.2
+ + numpy==2.2.6
+ + nvidia-cublas-cu12==12.6.4.1
+ + nvidia-cuda-cupti-cu12==12.6.80
+ + nvidia-cuda-nvrtc-cu12==12.6.85
+ + nvidia-cuda-runtime-cu12==12.6.77
+ + nvidia-cudnn-cu12==9.10.2.21
+ + nvidia-cufft-cu12==11.3.0.4
+ + nvidia-cufile-cu12==1.11.1.6
+ + nvidia-curand-cu12==10.3.7.77
+ + nvidia-cusolver-cu12==11.7.1.2
+ + nvidia-cusparse-cu12==12.5.4.2
+ + nvidia-cusparselt-cu12==0.7.1
+ + nvidia-nccl-cu12==2.29.3
+ + nvidia-nvjitlink-cu12==12.6.85
+ + nvidia-nvshmem-cu12==3.4.5
+ + nvidia-nvtx-cu12==12.6.77
+ + packaging==26.2
+ + propcache==0.5.2
+ + psutil==7.2.2
+ + pygments==2.20.0
+ + pyparsing==3.3.2
+ + pyyaml==6.0.3
+ + regex==2026.5.9
+ + requests==2.34.2
+ + rich==15.0.0
+ + safetensors==0.8.0
+ + setuptools==81.0.0
+ + shellingham==1.5.4
+ + sympy==1.14.0
+ + tokenizers==0.22.2
+ + torch==2.12.1+cu126
+ + torch-geometric==2.8.0
+ + tqdm==4.68.3
+ + transformers==5.12.1
+ + triton==3.7.1
+ + typer==0.25.1
+ + typing-extensions==4.15.0
+ + urllib3==2.7.0
+ + xxhash==3.7.1
+ + yarl==1.24.2
+=== [Thu Jun 25 07:15:46 PM EDT 2026] STEP 4: torch / CUDA check (expect CUDA 12.6) ===
+TORCH 2.12.1+cu126 CUDA 12.6 avail True devs 5
+=== [Thu Jun 25 07:16:06 PM EDT 2026] STEP 5: 5-sample dry run on A100 GPU 0 ===
+2026-06-25 19:16:12,171 - INFO - Limiting to 5 PDB files for this run.
+2026-06-25 19:16:12,171 - INFO - Found 1 PDB files to process.
+2026-06-25 19:16:12,586 - INFO - Using device: cuda
+Structures:   0%|          | 0/1 [00:00<?, ?pdb/s]                                                  2026-06-25 19:16:16,830 - WARNING - Duplicate IMGT integer position E116 (insertion code variant) - MadraX cannot distinguish these; keeping the first one only.
+Structures:   0%|          | 0/1 [00:00<?, ?pdb/s]                                                  2026-06-25 19:16:16,941 - INFO - [1/1] Processing 1ao7 (298 interface residues)
+Structures:   0%|          | 0/1 [00:00<?, ?pdb/s]
+Mutations 1ao7:   0%|          | 0/5662 [00:00<?, ?mut/s][A
+Mutations 1ao7:   1%|▏         | 75/5662 [00:40<50:44,  1.84mut/s][A
+Mutations 1ao7:   3%|▎         | 150/5662 [01:18<47:45,  1.92mut/s][A
+Mutations 1ao7:   4%|▍         | 225/5662 [01:56<46:20,  1.96mut/s][A
+Mutations 1ao7:   5%|▌         | 300/5662 [02:33<45:26,  1.97mut/s][A
+Mutations 1ao7:   7%|▋         | 375/5662 [03:11<44:32,  1.98mut/s][A
+Mutations 1ao7:   8%|▊         | 450/5662 [03:49<43:49,  1.98mut/s][A
+Mutations 1ao7:   9%|▉         | 525/5662 [04:27<43:21,  1.97mut/s][A

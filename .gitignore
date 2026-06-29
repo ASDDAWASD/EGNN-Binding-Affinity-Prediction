@@ -2,3 +2,4 @@
 artifacts/
 .vscode/
 __pycache__/
+.pdb
