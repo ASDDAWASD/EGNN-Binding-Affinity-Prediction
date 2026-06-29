@@ -2,4 +2,6 @@
 artifacts/
 .vscode/
 __pycache__/
-.pdb
+*.log
+*.pdb
+runs/
