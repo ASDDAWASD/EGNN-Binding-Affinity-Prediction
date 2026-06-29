@@ -249,7 +249,7 @@ def process_job(
     # them through MadraX in large batched forward passes instead of one
     # forward pass per single mutation -- this is the throughput-critical
     # step for reaching ~1M datapoints in a reasonable wall-clock time.
-    flat_jobs: List[Tuple[MutationTarget, str]] = []
+    flat_jobs: List[Tuple[MutationTarget, str, str]] = []
     for target in job.targets:
         for mutant_aa in AMINO_ACIDS:
             if mutant_aa == target.wt_aa:
@@ -308,24 +308,12 @@ def process_job(
                         "Residue_Position": target.resnum,
                         "WT_Amino_Acid": target.wt_aa,
                         "Mutant_Amino_Acid": mutant_aa,
+                        "ddG": round(ddg, 4),
+                        "source": SOURCE_TAG,
                         "Distance_to_CDR_center": round(target.distance_to_cdr, 3),
-                        "MadraX_ddG": round(ddg, 4),
                     }
                 )
-                continue
-            writer.writerow(
-                {
-                    "PDB_ID": job.pdb_id,
-                    "Chain": target.chain,
-                    "Residue_Position": target.resnum,
-                    "WT_Amino_Acid": target.wt_aa,
-                    "Mutant_Amino_Acid": mutant_aa,
-                    "ddG": round(ddg, 4),
-                    "source": SOURCE_TAG,
-                    "Distance_to_CDR_center": round(target.distance_to_cdr, 3),
-                }
-            )
-            written += 1
+                written += 1
 
             pending = pending[len(batch) :]
             progress.update(len(batch))
