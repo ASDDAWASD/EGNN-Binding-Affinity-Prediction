@@ -11,11 +11,13 @@ through ``run_flex_ddg.py``. Nothing here invokes Rosetta -- it only prepares
 inputs, so it is safe to run anywhere (including to dry-run the pipeline).
 
 Resfile format (Rosetta): default all positions to repack-as-native (NATAA),
-then force the single target position to the mutant identity with PIKAA.
+then force the single target position to the mutant identity with PIKAA. The
+PDB insertion code (if any) is appended directly to the residue number, exactly
+as Rosetta expects, so CDR3 insertion-coded positions are targeted correctly.
 
     NATAA
     start
-    <resnum> <chain> PIKAA <mut_one_letter>
+    <resnum><icode> <chain> PIKAA <mut_one_letter>
 """
 
 from __future__ import annotations
@@ -58,9 +60,11 @@ JOBS_FIELDS = [
 ]
 
 
-def write_resfile(path: Path, chain: str, resnum: int, mut_one: str) -> None:
+def write_resfile(path: Path, chain: str, resnum: int, icode: str, mut_one: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"NATAA\nstart\n{resnum} {chain} PIKAA {mut_one}\n")
+    # Rosetta resfile: insertion code is appended to the number with no space
+    # (e.g. "111A B PIKAA L"); icode is "" for ordinary residues.
+    path.write_text(f"NATAA\nstart\n{resnum}{icode} {chain} PIKAA {mut_one}\n")
 
 
 def main() -> None:
@@ -112,8 +116,8 @@ def main() -> None:
                 for mut_one in ONE_LETTER:
                     if mut_one == wt_one:
                         continue
-                    resfile = resfile_dir / pdb_id / f"{t.chain}{t.resnum}{wt_one}{mut_one}.resfile"
-                    write_resfile(resfile, t.chain, t.resnum, mut_one)
+                    resfile = resfile_dir / pdb_id / f"{t.chain}{t.resnum}{t.icode}{wt_one}{mut_one}.resfile"
+                    write_resfile(resfile, t.chain, t.resnum, t.icode, mut_one)
                     writer.writerow(
                         {
                             "job_id": job_id,

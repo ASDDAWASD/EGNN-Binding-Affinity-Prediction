@@ -251,8 +251,12 @@ def main() -> None:
     ap.add_argument("--output", type=str, default="rosetta_flex/results/flex_ddg.csv")
     ap.add_argument("--rosetta_bin", type=str, default=os.environ.get("ROSETTA_SCRIPTS_BIN", "rosetta_scripts.default.linuxgccrelease"))
     ap.add_argument("--protocol_xml", type=str, default="rosetta_flex/ddG_backrub.xml")
-    ap.add_argument("--backrub_trials", type=int, default=35000, help="Backrub steps (Barlow 2018 default).")
-    ap.add_argument("--nstruct", type=int, default=35, help="Ensemble size (Barlow 2018 default).")
+    ap.add_argument("--backrub_trials", type=int, default=3500,
+                    help="Backrub MC steps. Default 3500 (Hummer et al./Graphinity 2025) — ~10x cheaper "
+                         "than Barlow 2018's 35000 with near-identical ddG. Pass 35000 for the full Barlow protocol.")
+    ap.add_argument("--nstruct", type=int, default=1,
+                    help="Ensemble size. Default 1 (Hummer et al./Graphinity 2025) — vs Barlow 2018's 35. "
+                         "The mutant-minus-WT difference cancels most single-model noise; ~35x cheaper. Pass 35 for the full protocol.")
     ap.add_argument("--workdir", type=str, default=None, help="Per-job scratch dir. Defaults to a temp dir.")
     ap.add_argument("--gam-coeffs", type=str, default=None, help="JSON of {score_type: weight} for GAM reweighting (optional).")
     ap.add_argument("--parse-only", type=str, default=None, help="Parse an existing ddG.db3 and print the ddG, no Rosetta run.")

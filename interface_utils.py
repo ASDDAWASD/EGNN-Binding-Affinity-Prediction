@@ -23,7 +23,10 @@ The geometry is identical in both cases:
    atoms purely by integer residue number, so IMGT insertion codes (e.g.
    "111A", "111B") collapse onto the same integer position; we mirror that
    limitation deliberately so a mutation directive always refers to a residue
-   the downstream engine can actually distinguish.
+   the downstream engine can actually distinguish. The kept representative's
+   insertion code is preserved on ``MutationTarget.icode`` so the Rosetta tier
+   (which *can* address insertion codes) can target the exact residue in its
+   resfile, while MadraX keeps using the integer position.
 """
 
 from __future__ import annotations
@@ -73,6 +76,7 @@ class MutationTarget:
     resnum: int
     wt_aa: str  # 3-letter code
     distance_to_cdr: float
+    icode: str = ""  # PDB insertion code of the kept residue ("" if none)
 
     @property
     def wt_aa_one(self) -> str:
@@ -141,17 +145,20 @@ def build_mutation_targets(interface_residues, cdr_com: np.ndarray) -> List[Muta
             continue
         chain_id = residue.get_parent().id
         resnum = residue.id[1]
+        icode = residue.id[2].strip()  # "" when there is no insertion code
         key = (chain_id, resnum)
         if key in seen:
             LOGGER.warning(
                 "Duplicate IMGT integer position %s%s (insertion code variant) "
-                "- downstream engines cannot distinguish these; keeping the first one only.",
+                "- MadraX cannot distinguish these; keeping the first one only.",
                 chain_id, resnum,
             )
             continue
         rep_atom = representative_atom(residue)
         distance = float(np.linalg.norm(rep_atom.coord - cdr_com)) if rep_atom is not None else -1.0
-        seen[key] = MutationTarget(chain=chain_id, resnum=resnum, wt_aa=wt_aa, distance_to_cdr=distance)
+        seen[key] = MutationTarget(
+            chain=chain_id, resnum=resnum, wt_aa=wt_aa, distance_to_cdr=distance, icode=icode
+        )
     return sorted(seen.values(), key=lambda t: (t.chain, t.resnum))
 
 

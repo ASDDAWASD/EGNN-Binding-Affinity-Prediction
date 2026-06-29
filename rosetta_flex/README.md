@@ -43,16 +43,47 @@ sbatch --array=0-$((NJOBS-1))%50 rosetta_flex/submit_array.sbatch
 python rosetta_flex/merge_results.py
 ```
 
-## Protocol parameters (Barlow 2018 defaults)
-- Backrub trials: `35000` (`--backrub_trials` / `BACKRUB_TRIALS`)
-- Ensemble size: `nstruct = 35` (`--nstruct` / `NSTRUCT`)
-- Score function: `talaris2014`
+## Protocol parameters (cheap defaults, after Graphinity 2025)
+
+Defaults follow the cost-reduced Flex ddG settings from Hummer et al.
+([*Nat. Comput. Sci.* 2025](https://www.nature.com/articles/s43588-025-00823-8)),
+which make a >20k-mutation Tier-2 dataset feasible:
+
+- **Backrub trials: `3500`** (`--backrub_trials` / `BACKRUB_TRIALS`) — vs Barlow 2018's `35000`.
+- **Ensemble size: `nstruct = 1`** (`--nstruct` / `NSTRUCT`) — vs Barlow 2018's `35`.
+- Score function: `talaris2014`.
 - `chains_to_move`: `DE` (TCR α/β separated from pMHC `ABC`) — set in `make_mutfiles.py`.
-- **GAM reweighting** is optional: pass `--gam-coeffs <json>` to `run_flex_ddg.py`
-  with the official `{score_type: weight}` coefficients from the
-  [flex_ddG tutorial](https://github.com/Kortemme-Lab/flex_ddG_tutorial). Without
-  it, ΔΔG uses Rosetta's `total_score` (the "nogam" variant). We do not ship
-  invented coefficients.
+
+Together these are ~**350× cheaper per mutation** than the full Barlow protocol
+(`10× fewer backrub steps × 35× smaller ensemble`) for **near-identical ΔΔG**.
+Why it holds up:
+- ΔΔG is a **difference** (mutant − WT) scored in the *same* locally-relaxed
+  backbone context, so most single-model/limited-sampling noise **cancels** — one
+  relaxed model (`nstruct=1`) already captures the signal.
+- 3,500 backrub steps already relax the *local* backbone enough to relieve the
+  strain a point mutation introduces; extending to 35,000 mostly re-samples the
+  same energy basin (diminishing returns).
+- The accuracy ceiling here is Flex ddG's intrinsic correlation to experiment
+  (~0.46), **not** ensemble size — so spending 350× compute to shave ensemble
+  noise barely moves it. For an EGNN training set, **volume + diversity beats
+  per-label precision** (the paper's central finding), so that compute is far
+  better spent on *more* mutations.
+
+Pass `--backrub_trials 35000 --nstruct 35` (or `BACKRUB_TRIALS`/`NSTRUCT` env
+vars) to recover the full Barlow protocol.
+
+- **GAM reweighting (recommended).** In Hummer et al., GAM-reweighted Flex ddG
+  reached Pearson 0.46 vs experiment, beating both non-GAM Flex ddG (0.42) and
+  FoldX (0.20). Pass `--gam-coeffs <json>` to `run_flex_ddg.py` with the official
+  `{score_type: weight}` coefficients from the
+  [flex_ddG tutorial](https://github.com/Kortemme-Lab/flex_ddG_tutorial) (drop the
+  file in e.g. `rosetta_flex/gam_coeffs.json`). Without it, ΔΔG uses Rosetta's raw
+  `total_score` (the uncalibrated "nogam" variant). We do not ship invented coefficients.
+
+- **Insertion codes.** `make_mutfiles.py` writes the PDB insertion code into each
+  resfile (`<resnum><icode> <chain> PIKAA ...`), so IMGT CDR3 insertion-coded
+  positions are mutated correctly in Rosetta (which distinguishes them, unlike the
+  MadraX integer-only parser).
 
 ## Output schema (shared with Tier 1)
 ```
