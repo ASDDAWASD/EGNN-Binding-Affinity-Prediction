@@ -37,12 +37,23 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
-from Bio.PDB import NeighborSearch, PDBIO, PDBParser, Select, Selection
+from Bio.PDB import PDBIO, PDBParser, Select
 from torch.utils.data import DataLoader, Dataset
+
+# Interface detection is shared with the Rosetta Flex ddG pipeline
+# (rosetta_flex/make_mutfiles.py) so both tiers mutate the same positions.
+from interface_utils import (
+    AMINO_ACIDS,
+    DEFAULT_COMPLEX_CHAINS,
+    DEFAULT_TCR_CHAINS,
+    IMGT_CDR_RANGES,
+    MutationTarget,
+    find_interface_targets,
+)
 
 try:
     from madrax.ForceField import ForceField
@@ -60,38 +71,25 @@ except ImportError as exc:  # MadraX is a hard requirement, not optional.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 LOGGER = logging.getLogger("tcr_pmhc_dataset")
 
-# Standard 20 amino acids, 3-letter codes (matches both BioPython resnames and
-# the residue-name tokens MadraX expects in its "resNum_chain_RESNAME" mutation
-# directives, e.g. "39_D_GLY").
-AMINO_ACIDS = [
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-]
-AMINO_ACID_SET = set(AMINO_ACIDS)
+# Constants and interface-detection helpers live in interface_utils so the
+# Rosetta Flex ddG pipeline can reuse the exact same definitions. The amino
+# acid list, chain conventions, IMGT CDR ranges and MutationTarget are imported
+# at the top of this module.
 
-# STCRDab's standardized chain identifiers after IMGT renumbering.
-DEFAULT_TCR_CHAINS = ("D", "E")  # TCR alpha, TCR beta
-DEFAULT_COMPLEX_CHAINS = ("A", "B", "C", "D", "E")  # MHC1, MHC2/B2M, peptide, TCR a/b
-
-# IMGT V-domain CDR residue-number ranges (inclusive). These index the actual
-# IMGT-assigned residue number stored in each residue's PDB sequence number,
-# not the residue's position in a Python list, so missing N-terminal residues
-# or gaps elsewhere in the loop do not shift the window.
-IMGT_CDR_RANGES = {
-    "CDR1": (27, 38),
-    "CDR2": (56, 65),
-    "CDR3": (105, 117),
-}
-
+# Shared ddG-label schema (single source of truth across both data tiers).
+# The first seven columns are identical for the MadraX and Rosetta CSVs;
+# `Distance_to_CDR_center` is an optional MadraX-only extra kept for analysis.
 CSV_FIELDNAMES = [
     "PDB_ID",
     "Chain",
     "Residue_Position",
     "WT_Amino_Acid",
     "Mutant_Amino_Acid",
+    "ddG",
+    "source",
     "Distance_to_CDR_center",
-    "MadraX_ddG",
 ]
+SOURCE_TAG = "madrax"
 
 # MadraX's plain-text PDB parser keys atoms purely by integer residue number
 # (madrax/utils.py: `resnum = int(line[22:26])`), so IMGT insertion codes
@@ -115,14 +113,6 @@ class InterfaceChainSelect(Select):
 
 
 @dataclass
-class MutationTarget:
-    chain: str
-    resnum: int
-    wt_aa: str
-    distance_to_cdr: float
-
-
-@dataclass
 class PdbJob:
     pdb_id: str
     clean_pdb_path: Optional[str]
@@ -138,94 +128,6 @@ def clean_structure(source_path: Path, dest_path: Path, allowed_chains: Sequence
     io.set_structure(structure)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     io.save(str(dest_path), select=InterfaceChainSelect(allowed_chains))
-
-
-def identify_cdr_loops(structure, tcr_chain_ids: Sequence[str]):
-    """Identify CDR1/2/3 residues on the TCR alpha/beta chains using IMGT numbering.
-
-    Assumes the input structure has already been IMGT-renumbered (as STCRDab
-    structures are), so a residue's CDR membership can be read directly off
-    its PDB residue number instead of guessed from list position.
-    """
-    cdr_residues = []
-    model = next(structure.get_models())
-    for chain in model:
-        if chain.id not in tcr_chain_ids:
-            continue
-        for residue in chain:
-            if residue.id[0] != " ":
-                continue
-            resnum = residue.id[1]
-            if any(lo <= resnum <= hi for lo, hi in IMGT_CDR_RANGES.values()):
-                cdr_residues.append(residue)
-    return cdr_residues
-
-
-def get_interface_residues(structure, cdr_residues, radius: float, allowed_chains: Sequence[str]):
-    """All residues (on any of `allowed_chains`) within `radius` Angstrom of any CDR atom."""
-    if not cdr_residues:
-        return []
-    model = next(structure.get_models())
-    searchable_atoms = [
-        atom
-        for chain in model
-        if chain.id in allowed_chains
-        for residue in chain
-        if residue.id[0] == " "
-        for atom in residue.get_atoms()
-    ]
-    if not searchable_atoms:
-        return []
-    cdr_atoms = Selection.unfold_entities(cdr_residues, "A")
-    ns = NeighborSearch(searchable_atoms)
-    interface_residues = set()
-    for atom in cdr_atoms:
-        interface_residues.update(ns.search(atom.coord, radius, level="R"))
-    return list(interface_residues)
-
-
-def cdr_center_of_mass(cdr_residues) -> np.ndarray:
-    coords = [atom.coord for res in cdr_residues for atom in res.get_atoms()]
-    return np.mean(coords, axis=0)
-
-
-def representative_atom(residue):
-    if "CB" in residue:
-        return residue["CB"]
-    if "CA" in residue:
-        return residue["CA"]
-    atoms = list(residue.get_atoms())
-    return atoms[0] if atoms else None
-
-
-def build_mutation_targets(interface_residues, cdr_com: np.ndarray) -> List[MutationTarget]:
-    """Deduplicate interface residues by (chain, integer resnum) and build targets.
-
-    If IMGT insertion codes produced multiple residues with the same integer
-    resnum on the same chain (MadraX cannot tell them apart - see module
-    docstring), only the first one encountered is kept and the rest are
-    dropped with a warning, since MadraX's own parser would silently merge
-    them into a single residue anyway.
-    """
-    seen: Dict[Tuple[str, int], MutationTarget] = {}
-    for residue in interface_residues:
-        wt_aa = residue.get_resname().upper()
-        if wt_aa not in AMINO_ACID_SET:
-            continue
-        chain_id = residue.get_parent().id
-        resnum = residue.id[1]
-        key = (chain_id, resnum)
-        if key in seen:
-            LOGGER.warning(
-                "Duplicate IMGT integer position %s%s (insertion code variant) "
-                "- MadraX cannot distinguish these; keeping the first one only.",
-                chain_id, resnum,
-            )
-            continue
-        rep_atom = representative_atom(residue)
-        distance = float(np.linalg.norm(rep_atom.coord - cdr_com)) if rep_atom is not None else -1.0
-        seen[key] = MutationTarget(chain=chain_id, resnum=resnum, wt_aa=wt_aa, distance_to_cdr=distance)
-    return sorted(seen.values(), key=lambda t: (t.chain, t.resnum))
 
 
 class TcrPmhcDataset(Dataset):
@@ -260,20 +162,17 @@ class TcrPmhcDataset(Dataset):
             parser = PDBParser(QUIET=True)
             structure = parser.get_structure(pdb_id, str(pdb_path))
 
-            cdr_residues = identify_cdr_loops(structure, self.tcr_chains)
-            if not cdr_residues:
-                return PdbJob(pdb_id, None, error="No CDR residues found (check chain IDs / IMGT numbering)")
-
-            interface_residues = get_interface_residues(
-                structure, cdr_residues, self.interface_radius, self.complex_chains
+            targets = find_interface_targets(
+                structure,
+                tcr_chains=self.tcr_chains,
+                complex_chains=self.complex_chains,
+                radius=self.interface_radius,
             )
-            if not interface_residues:
-                return PdbJob(pdb_id, None, error="No interface residues found within radius")
-
-            cdr_com = cdr_center_of_mass(cdr_residues)
-            targets = build_mutation_targets(interface_residues, cdr_com)
             if not targets:
-                return PdbJob(pdb_id, None, error="Interface residues were all non-standard")
+                return PdbJob(
+                    pdb_id, None,
+                    error="No mutable interface residues found (check chain IDs / IMGT numbering / radius)",
+                )
 
             clean_path = self.clean_dir / f"{pdb_id}.pdb"
             clean_structure(pdb_path, clean_path, self.complex_chains)
@@ -398,8 +297,9 @@ def process_job(
                     "Residue_Position": target.resnum,
                     "WT_Amino_Acid": target.wt_aa,
                     "Mutant_Amino_Acid": mutant_aa,
+                    "ddG": round(ddg, 4),
+                    "source": SOURCE_TAG,
                     "Distance_to_CDR_center": round(target.distance_to_cdr, 3),
-                    "MadraX_ddG": round(ddg, 4),
                 }
             )
             written += 1
@@ -423,6 +323,7 @@ def main() -> None:
     parser.add_argument("--pdb_dir", type=str, default="stcrdab_structures/", help="Directory containing STCRDab PDB files.")
     parser.add_argument("--output", type=str, default="tcr_pmhc_interface_ddg.csv", help="Output CSV file path.")
     parser.add_argument("--limit", type=int, default=None, help="Limit the number of PDB files to process (useful for dry runs).")
+    parser.add_argument("--target_samples", type=int, default=None, help="Stop cleanly once this many ddG rows have been written (e.g. 1000000). Checked at PDB-job boundaries.")
     parser.add_argument("--interface_radius", type=float, default=10.0, help="Angstrom radius defining the binding interface around CDR atoms.")
     parser.add_argument("--tcr_chains", type=str, default=",".join(DEFAULT_TCR_CHAINS), help="Comma-separated chain IDs for the TCR alpha/beta chains.")
     parser.add_argument("--complex_chains", type=str, default=",".join(DEFAULT_COMPLEX_CHAINS), help="Comma-separated chain IDs that make up the full TCR-pMHC complex.")
@@ -500,6 +401,13 @@ def main() -> None:
             done_f.write(job.pdb_id + "\n")
             done_f.flush()
             LOGGER.info("%s -> %d ddG points (running total: %d)", job.pdb_id, written, total_written)
+            if args.target_samples is not None and total_written >= args.target_samples:
+                LOGGER.info(
+                    "Reached target of %d samples (%d written) after %d/%d structures; stopping. "
+                    "Re-run with --resume to extend the dataset further.",
+                    args.target_samples, total_written, i + 1, len(dataset),
+                )
+                break
 
     LOGGER.info("Successfully generated %d synthetic ddG points.", total_written)
     LOGGER.info("Results written to %s (failures logged to %s).", output_csv, failure_log_path)
