@@ -8,11 +8,18 @@ dependencies = [
     "biopython>=1.87",
     "madrax",
     "numpy>=2.2.6",
+    "requests>=2.31",
     "torch>=2.12.1",
     "torch-geometric>=2.8.0",
     "tqdm>=4.68.3",
     "transformers>=5.12.1",
 ]
+
+# ANARCI (IMGT renumbering) is only needed for the optional
+# `--renumber-with-anarci` path in scripts/fetch_stcrdab.py; STCRDab already
+# serves IMGT-numbered coordinates, so it is kept out of the core deps.
+[project.optional-dependencies]
+renumber = ["anarci"]
 
 [tool.uv.sources]
 madrax = { git = "https://bitbucket.org/grogdrinker/madrax/" }
