@@ -45,6 +45,7 @@ from Bio.PDB import PDBIO, PDBParser, Select
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
+<<<<<<< HEAD
 
 # Interface detection is shared with the Rosetta Flex ddG pipeline
 # (rosetta_flex/make_mutfiles.py) so both tiers mutate the same positions.
@@ -56,6 +57,8 @@ from interface_utils import (
     MutationTarget,
     find_interface_targets,
 )
+=======
+>>>>>>> 7b1696b (add runs/)
 
 try:
     from madrax.ForceField import ForceField
@@ -308,9 +311,14 @@ def process_job(
                         "Residue_Position": target.resnum,
                         "WT_Amino_Acid": target.wt_aa,
                         "Mutant_Amino_Acid": mutant_aa,
+<<<<<<< HEAD
                         "ddG": round(ddg, 4),
                         "source": SOURCE_TAG,
                         "Distance_to_CDR_center": round(target.distance_to_cdr, 3),
+=======
+                        "Distance_to_CDR_center": round(target.distance_to_cdr, 3),
+                        "MadraX_ddG": round(ddg, 4),
+>>>>>>> 7b1696b (add runs/)
                     }
                 )
                 written += 1
@@ -422,6 +430,16 @@ def main() -> None:
                     args.target_samples, total_written, i + 1, len(dataset),
                 )
                 break
+        with logging_redirect_tqdm():
+            for i, job in enumerate(tqdm(loader, total=len(dataset), desc="Structures", unit="pdb")):
+                LOGGER.info("[%d/%d] Processing %s (%d interface residues)", i + 1, len(dataset), job.pdb_id, len(job.targets))
+                written = process_job(job, force_field, device, args.mutation_batch_size, args.clash_threshold, writer, failure_writer)
+                total_written += written
+                out_f.flush()
+                fail_f.flush()
+                done_f.write(job.pdb_id + "\n")
+                done_f.flush()
+                LOGGER.info("%s -> %d ddG points (running total: %d)", job.pdb_id, written, total_written)
 
     LOGGER.info("Successfully generated %d synthetic ddG points.", total_written)
     LOGGER.info("Results written to %s (failures logged to %s).", output_csv, failure_log_path)
