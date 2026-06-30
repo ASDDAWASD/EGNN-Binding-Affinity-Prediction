@@ -73,6 +73,12 @@ class MutationTarget:
     resnum: int
     wt_aa: str  # 3-letter code
     distance_to_cdr: float
+    # Minimum atom-atom distance from this residue to the *opposite* binding
+    # partner (TCR<->pMHC). Small (<~5 A) => a genuine inter-chain contact;
+    # large => second-shell residue pulled in by the broad CDR radius. Kept as
+    # an analysis column so true contacts can be filtered downstream. -1.0 means
+    # "not computed / no opposite-partner atoms present".
+    min_interchain_dist: float = -1.0
 
     @property
     def wt_aa_one(self) -> str:
@@ -132,8 +138,47 @@ def representative_atom(residue):
     return atoms[0] if atoms else None
 
 
-def build_mutation_targets(interface_residues, cdr_com: np.ndarray) -> List[MutationTarget]:
-    """Deduplicate interface residues by (chain, integer resnum) and build targets."""
+def _group_atom_coords(structure, chain_ids: Sequence[str]) -> np.ndarray:
+    """Stack the coordinates of every standard-residue atom on ``chain_ids``."""
+    model = next(structure.get_models())
+    coords = [
+        atom.coord
+        for chain in model
+        if chain.id in set(chain_ids)
+        for residue in chain
+        if residue.id[0] == " "
+        for atom in residue.get_atoms()
+    ]
+    return np.asarray(coords, dtype=float) if coords else np.empty((0, 3), dtype=float)
+
+
+def _min_dist_to_group(residue, group_coords: np.ndarray) -> float:
+    """Minimum atom-atom distance from ``residue`` to a precomputed coord array."""
+    if group_coords.shape[0] == 0:
+        return -1.0
+    res_coords = np.asarray([atom.coord for atom in residue.get_atoms()], dtype=float)
+    if res_coords.shape[0] == 0:
+        return -1.0
+    # (n_res_atoms, n_group_atoms) pairwise distances; residues are tiny so this
+    # broadcast is cheap even against a few thousand opposite-partner atoms.
+    dists = np.linalg.norm(res_coords[:, None, :] - group_coords[None, :, :], axis=2)
+    return float(dists.min())
+
+
+def build_mutation_targets(
+    interface_residues,
+    cdr_com: np.ndarray,
+    tcr_chains: Sequence[str],
+    tcr_coords: np.ndarray,
+    pmhc_coords: np.ndarray,
+) -> List[MutationTarget]:
+    """Deduplicate interface residues by (chain, integer resnum) and build targets.
+
+    For each residue, also records the minimum distance to the *opposite* binding
+    partner: residues on a TCR chain are measured against the pMHC atoms and vice
+    versa, so the column flags genuine inter-chain contacts vs. second-shell hits.
+    """
+    tcr_set = set(tcr_chains)
     seen: Dict[Tuple[str, int], MutationTarget] = {}
     for residue in interface_residues:
         wt_aa = residue.get_resname().upper()
@@ -151,7 +196,15 @@ def build_mutation_targets(interface_residues, cdr_com: np.ndarray) -> List[Muta
             continue
         rep_atom = representative_atom(residue)
         distance = float(np.linalg.norm(rep_atom.coord - cdr_com)) if rep_atom is not None else -1.0
-        seen[key] = MutationTarget(chain=chain_id, resnum=resnum, wt_aa=wt_aa, distance_to_cdr=distance)
+        opposite = pmhc_coords if chain_id in tcr_set else tcr_coords
+        min_interchain = _min_dist_to_group(residue, opposite)
+        seen[key] = MutationTarget(
+            chain=chain_id,
+            resnum=resnum,
+            wt_aa=wt_aa,
+            distance_to_cdr=distance,
+            min_interchain_dist=min_interchain,
+        )
     return sorted(seen.values(), key=lambda t: (t.chain, t.resnum))
 
 
@@ -174,4 +227,9 @@ def find_interface_targets(
     if not interface_residues:
         return []
     cdr_com = cdr_center_of_mass(cdr_residues)
-    return build_mutation_targets(interface_residues, cdr_com)
+    # Partner groups for the inter-chain distance: TCR (tcr_chains) vs. pMHC
+    # (everything else in the complex). Atom coords are gathered once per group.
+    pmhc_chains = [c for c in complex_chains if c not in set(tcr_chains)]
+    tcr_coords = _group_atom_coords(structure, tcr_chains)
+    pmhc_coords = _group_atom_coords(structure, pmhc_chains)
+    return build_mutation_targets(interface_residues, cdr_com, tcr_chains, tcr_coords, pmhc_coords)

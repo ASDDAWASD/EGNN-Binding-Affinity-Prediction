@@ -11,8 +11,11 @@ tiers concatenate cleanly:
 ```
 PDB_ID, Chain, Residue_Position, WT_Amino_Acid, Mutant_Amino_Acid, ddG, source
 ```
-`source ∈ {madrax, rosetta_flex}`; ΔΔG is **mutant − wild type**. (MadraX adds one
-analysis-only column, `Distance_to_CDR_center`.)
+`source ∈ {madrax, rosetta_flex}`; ΔΔG is a **binding** ΔΔG (mutant − wild type),
+obtained by chain separation (TCR vs pMHC) so it is comparable to the ATLAS/TRAIT
+benchmarks. MadraX adds two analysis-only columns, `Distance_to_CDR_center` and
+`Min_Interchain_Distance` (distance to the opposite partner — small ⇒ a true
+inter-chain contact).
 
 | Tier | Engine | Script | Teaches | Scale |
 |------|--------|--------|---------|-------|
@@ -47,7 +50,11 @@ python scripts/fetch_stcrdab.py --out_dir stcrdab_structures/                   
 
 Rigid, GPU-batched saturation mutagenesis (19 mutants per interface residue). CDR
 loops are read from IMGT numbers (CDR1 27-38, CDR2 56-65, CDR3 105-117) on chains D/E,
-so inputs must be IMGT-numbered — exactly what Step 1 produces.
+so inputs must be IMGT-numbered — exactly what Step 1 produces. Each mutant is scored
+as a **binding** ΔΔG: the full complex and the mutated residue's own chain group in
+isolation are both scored, and the label is `complex_ΔΔG − partner_ΔΔG` (the
+non-mutated partner cancels). Rows are flushed every batch, so an interrupted run
+keeps what it computed.
 
 ```bash
 # dry run (inspect the CSV)
@@ -58,6 +65,19 @@ nohup uv run generate_tcr_pmhc_dataset.py --output tcr_pmhc_interface_ddg.csv \
 ```
 `--resume` skips PDB IDs already in `<output>.done`. Steric-clash blow-ups
 (`|ddG| > --clash_threshold`) are filtered to `<output>_failures.csv`.
+
+**Throughput / parallelism.** The cost is CPU-bound (`create_info_tensors`,
+~0.5 s/mutant) while the GPU stays mostly idle, so run several **shards** that share
+one GPU rather than enlarging the batch. Each shard takes a disjoint slice of the
+PDB list and writes its own `.shardN` CSV (`merge` afterwards by concatenating and
+dropping duplicate headers):
+```bash
+for s in $(seq 0 15); do
+  CUDA_VISIBLE_DEVICES=0 uv run generate_tcr_pmhc_dataset.py \
+    --num_shards 16 --shard_id "$s" --num_workers 4 \
+    --output tcr_pmhc_interface_ddg.csv > gen.shard$s.log 2>&1 &
+done
+```
 
 ## Step 3 — Tier 2: Rosetta Flex ddG (`rosetta_flex/`)
 

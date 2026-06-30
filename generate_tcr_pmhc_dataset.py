@@ -80,7 +80,10 @@ LOGGER = logging.getLogger("tcr_pmhc_dataset")
 
 # Shared ddG-label schema (single source of truth across both data tiers).
 # The first seven columns are identical for the MadraX and Rosetta CSVs;
-# `Distance_to_CDR_center` is an optional MadraX-only extra kept for analysis.
+# `Distance_to_CDR_center` and `Min_Interchain_Distance` are MadraX-only analysis
+# extras (the latter flags genuine inter-chain contacts vs. second-shell hits).
+# `ddG` is a *binding* ddG: complex change minus the mutated residue's own-chain
+# change in isolation (chain separation), so it is comparable to ATLAS/TRAIT.
 CSV_FIELDNAMES = [
     "PDB_ID",
     "Chain",
@@ -90,6 +93,7 @@ CSV_FIELDNAMES = [
     "ddG",
     "source",
     "Distance_to_CDR_center",
+    "Min_Interchain_Distance",
 ]
 SOURCE_TAG = "madrax"
 
@@ -117,7 +121,9 @@ class InterfaceChainSelect(Select):
 @dataclass
 class PdbJob:
     pdb_id: str
-    clean_pdb_path: Optional[str]
+    clean_pdb_path: Optional[str]  # full complex (all complex_chains)
+    clean_tcr_path: Optional[str] = None  # TCR-only subset (tcr_chains)
+    clean_pmhc_path: Optional[str] = None  # pMHC-only subset (complex_chains - tcr_chains)
     targets: List[MutationTarget] = field(default_factory=list)
     error: Optional[str] = None
 
@@ -152,6 +158,9 @@ class TcrPmhcDataset(Dataset):
         self.clean_dir = clean_dir
         self.tcr_chains = tuple(tcr_chains)
         self.complex_chains = tuple(complex_chains)
+        # pMHC = the complex minus the TCR chains; used to score the isolated
+        # binding partner for the binding-ddG (chain-separation) calculation.
+        self.pmhc_chains = tuple(c for c in complex_chains if c not in set(tcr_chains))
         self.interface_radius = interface_radius
 
     def __len__(self) -> int:
@@ -176,10 +185,24 @@ class TcrPmhcDataset(Dataset):
                     error="No mutable interface residues found (check chain IDs / IMGT numbering / radius)",
                 )
 
-            clean_path = self.clean_dir / f"{pdb_id}.pdb"
-            clean_structure(pdb_path, clean_path, self.complex_chains)
+            # Write the full complex plus the two isolated binding partners. The
+            # partner subsets are scored separately so the per-mutation label is a
+            # *binding* ddG (complex change minus the change to the mutated
+            # residue's own chain in isolation), not whole-complex stability.
+            complex_path = self.clean_dir / f"{pdb_id}.pdb"
+            tcr_path = self.clean_dir / f"{pdb_id}_tcr.pdb"
+            pmhc_path = self.clean_dir / f"{pdb_id}_pmhc.pdb"
+            clean_structure(pdb_path, complex_path, self.complex_chains)
+            clean_structure(pdb_path, tcr_path, self.tcr_chains)
+            clean_structure(pdb_path, pmhc_path, self.pmhc_chains)
 
-            return PdbJob(pdb_id, str(clean_path), targets)
+            return PdbJob(
+                pdb_id,
+                str(complex_path),
+                clean_tcr_path=str(tcr_path),
+                clean_pmhc_path=str(pmhc_path),
+                targets=targets,
+            )
         except Exception as exc:  # noqa: BLE001 - report and keep the pipeline alive
             return PdbJob(pdb_id, None, error=f"{type(exc).__name__}: {exc}")
 
@@ -224,45 +247,46 @@ def chunked(items: Sequence, size: int):
         yield items[i : i + size]
 
 
-def process_job(
-    job: PdbJob,
+def _score_partner_group(
+    pdb_id: str,
+    targets: Sequence[MutationTarget],
+    complex_coords: torch.Tensor,
+    complex_atom_names: List[List[str]],
+    partner_coords: torch.Tensor,
+    partner_atom_names: List[List[str]],
+    partner_label: str,
     force_field: ForceField,
     device: torch.device,
     mutation_batch_size: int,
     clash_threshold: float,
     writer: csv.DictWriter,
     failure_log: csv.DictWriter,
+    out_f,
+    fail_f,
 ) -> int:
-    if job.error or job.clean_pdb_path is None:
-        LOGGER.warning("Skipping %s: %s", job.pdb_id, job.error)
-        failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": job.error or "unknown"})
-        return 0
+    """Score every mutant of ``targets`` as a *binding* ddG.
 
-    try:
-        coords, atom_names, _ = load_madrax_inputs(job.clean_pdb_path)
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Failed to parse %s for MadraX: %s", job.pdb_id, exc)
-        failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": f"MadraX parse failure: {exc}"})
-        return 0
-
-    # Flatten every (residue, mutant) pair for the whole structure, then feed
-    # them through MadraX in large batched forward passes instead of one
-    # forward pass per single mutation -- this is the throughput-critical
-    # step for reaching ~1M datapoints in a reasonable wall-clock time.
+    For each batch we score the same mutations twice -- once in the full complex
+    and once in the isolated binding partner that carries the mutated residue --
+    and report ``complex_ddg - partner_ddg``. The non-mutated partner's energy is
+    identical in WT and mutant, so it cancels and need not be scored.
+    """
     flat_jobs: List[Tuple[MutationTarget, str, str]] = []
-    for target in job.targets:
+    for target in targets:
         for mutant_aa in AMINO_ACIDS:
             if mutant_aa == target.wt_aa:
                 continue
             directive = f"{target.resnum}_{target.chain}_{mutant_aa}"
             flat_jobs.append((target, mutant_aa, directive))
+    if not flat_jobs:
+        return 0
 
     written = 0
     batch_size = mutation_batch_size
     pending = list(flat_jobs)
     progress = tqdm(
         total=len(flat_jobs),
-        desc=f"Mutations {job.pdb_id}",
+        desc=f"Mutations {pdb_id}/{partner_label}",
         unit="mut",
         leave=False,
     )
@@ -271,39 +295,41 @@ def process_job(
             batch = pending[:batch_size]
             directives = [item[2] for item in batch]
             try:
-                ddg_values = run_mutation_batch(coords, atom_names, directives, force_field, device)
+                complex_ddg = run_mutation_batch(complex_coords, complex_atom_names, directives, force_field, device)
+                partner_ddg = run_mutation_batch(partner_coords, partner_atom_names, directives, force_field, device)
             except torch.cuda.OutOfMemoryError:
                 torch.cuda.empty_cache()
                 if batch_size <= 1:
-                    LOGGER.error("OOM on %s even at batch size 1; skipping remaining mutants.", job.pdb_id)
-                    failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": "CUDA OOM at batch size 1"})
+                    LOGGER.error("OOM on %s even at batch size 1; skipping remaining mutants.", pdb_id)
+                    failure_log.writerow({"PDB_ID": pdb_id, "Reason": "CUDA OOM at batch size 1"})
                     pending = pending[1:]
                     progress.update(1)
                     continue
                 batch_size = max(1, batch_size // 2)
-                LOGGER.warning("CUDA OOM on %s; reducing mutation batch size to %d and retrying.", job.pdb_id, batch_size)
+                LOGGER.warning("CUDA OOM on %s; reducing mutation batch size to %d and retrying.", pdb_id, batch_size)
                 continue
             except Exception as exc:  # noqa: BLE001
-                LOGGER.error("MadraX forward pass failed for %s batch starting at %s: %s", job.pdb_id, directives[0], exc)
-                failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": f"forward pass failure: {exc}"})
+                LOGGER.error("MadraX forward pass failed for %s batch starting at %s: %s", pdb_id, directives[0], exc)
+                failure_log.writerow({"PDB_ID": pdb_id, "Reason": f"forward pass failure: {exc}"})
                 pending = pending[len(batch) :]
                 progress.update(len(batch))
                 continue
 
-            for (target, mutant_aa, _directive), ddg_tensor in zip(batch, ddg_values):
+            binding = complex_ddg - partner_ddg
+            for (target, mutant_aa, _directive), ddg_tensor in zip(batch, binding):
                 ddg = float(ddg_tensor.item())
                 if not np.isfinite(ddg) or abs(ddg) > clash_threshold:
                     LOGGER.warning(
-                        "Severe steric clash for %s %s%d %s->%s (ddG=%s); filtering out.",
-                        job.pdb_id, target.chain, target.resnum, target.wt_aa, mutant_aa, ddg,
+                        "Severe steric clash for %s %s%d %s->%s (binding ddG=%s); filtering out.",
+                        pdb_id, target.chain, target.resnum, target.wt_aa, mutant_aa, ddg,
                     )
                     failure_log.writerow(
-                        {"PDB_ID": job.pdb_id, "Reason": f"clash at {target.chain}{target.resnum}{target.wt_aa}->{mutant_aa} (ddG={ddg})"}
+                        {"PDB_ID": pdb_id, "Reason": f"clash at {target.chain}{target.resnum}{target.wt_aa}->{mutant_aa} (ddG={ddg})"}
                     )
                     continue
                 writer.writerow(
                     {
-                        "PDB_ID": job.pdb_id,
+                        "PDB_ID": pdb_id,
                         "Chain": target.chain,
                         "Residue_Position": target.resnum,
                         "WT_Amino_Acid": target.wt_aa,
@@ -311,17 +337,76 @@ def process_job(
                         "ddG": round(ddg, 4),
                         "source": SOURCE_TAG,
                         "Distance_to_CDR_center": round(target.distance_to_cdr, 3),
+                        "Min_Interchain_Distance": round(target.min_interchain_dist, 3),
                     }
                 )
                 written += 1
 
             pending = pending[len(batch) :]
             progress.update(len(batch))
-            del ddg_values
+            # Flush every batch so an interrupted long structure keeps the rows it
+            # has already computed (a full structure can take many minutes).
+            out_f.flush()
+            fail_f.flush()
+            del complex_ddg, partner_ddg, binding
             if device.type == "cuda":
                 torch.cuda.empty_cache()
     finally:
         progress.close()
+
+    return written
+
+
+def process_job(
+    job: PdbJob,
+    force_field: ForceField,
+    device: torch.device,
+    mutation_batch_size: int,
+    clash_threshold: float,
+    tcr_chains: Sequence[str],
+    writer: csv.DictWriter,
+    failure_log: csv.DictWriter,
+    out_f,
+    fail_f,
+) -> int:
+    if job.error or job.clean_pdb_path is None:
+        LOGGER.warning("Skipping %s: %s", job.pdb_id, job.error)
+        failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": job.error or "unknown"})
+        return 0
+
+    try:
+        complex_coords, complex_atom_names, _ = load_madrax_inputs(job.clean_pdb_path)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.error("Failed to parse %s for MadraX: %s", job.pdb_id, exc)
+        failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": f"MadraX parse failure: {exc}"})
+        return 0
+
+    tcr_set = set(tcr_chains)
+    tcr_targets = [t for t in job.targets if t.chain in tcr_set]
+    pmhc_targets = [t for t in job.targets if t.chain not in tcr_set]
+
+    written = 0
+    for targets, partner_path, label in (
+        (tcr_targets, job.clean_tcr_path, "TCR"),
+        (pmhc_targets, job.clean_pmhc_path, "pMHC"),
+    ):
+        if not targets:
+            continue
+        if not partner_path:
+            failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": f"missing {label} partner subset"})
+            continue
+        try:
+            partner_coords, partner_atom_names, _ = load_madrax_inputs(partner_path)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error("Failed to parse %s %s partner for MadraX: %s", job.pdb_id, label, exc)
+            failure_log.writerow({"PDB_ID": job.pdb_id, "Reason": f"{label} partner parse failure: {exc}"})
+            continue
+        written += _score_partner_group(
+            job.pdb_id, targets, complex_coords, complex_atom_names,
+            partner_coords, partner_atom_names, label,
+            force_field, device, mutation_batch_size, clash_threshold,
+            writer, failure_log, out_f, fail_f,
+        )
 
     return written
 
@@ -346,10 +431,18 @@ def main() -> None:
     parser.add_argument("--num_workers", type=int, default=max(1, (os.cpu_count() or 2) - 1), help="CPU worker processes for PDB parsing / interface detection.")
     parser.add_argument("--clean_dir", type=str, default=None, help="Directory to cache cleaned, chain-filtered PDBs. Defaults to <pdb_dir>/_clean.")
     parser.add_argument("--resume", action="store_true", help="Skip PDB IDs already recorded as done in <output>.done.")
+    parser.add_argument("--num_shards", type=int, default=1, help="Partition the PDB list into this many shards for parallel runs (one process per shard; they may share a single GPU since the bottleneck is CPU-side).")
+    parser.add_argument("--shard_id", type=int, default=0, help="Which shard (0..num_shards-1) this process handles. Output/failure/.done paths are auto-suffixed with .shardN.")
     args = parser.parse_args()
+
+    if args.num_shards < 1 or not (0 <= args.shard_id < args.num_shards):
+        raise SystemExit(f"Invalid sharding: shard_id={args.shard_id} must be in [0, num_shards={args.num_shards}).")
 
     pdb_dir = Path(args.pdb_dir)
     output_csv = Path(args.output)
+    # Keep concurrent shards from writing the same files.
+    if args.num_shards > 1:
+        output_csv = output_csv.with_name(f"{output_csv.stem}.shard{args.shard_id}{output_csv.suffix}")
     tcr_chains = tuple(c.strip() for c in args.tcr_chains.split(",") if c.strip())
     complex_chains = tuple(c.strip() for c in args.complex_chains.split(",") if c.strip())
     clean_dir = Path(args.clean_dir) if args.clean_dir else pdb_dir / "_clean"
@@ -360,6 +453,9 @@ def main() -> None:
         LOGGER.info("Directory %s created. Please populate it with STCRDab PDB files.", pdb_dir)
 
     pdb_files = sorted(glob.glob(str(pdb_dir / "*.pdb")))
+    if args.num_shards > 1:
+        pdb_files = pdb_files[args.shard_id :: args.num_shards]
+        LOGGER.info("Shard %d/%d: handling %d of the PDB files.", args.shard_id, args.num_shards, len(pdb_files))
 
     done_path = output_csv.with_suffix(output_csv.suffix + ".done")
     done_ids = load_done_pdb_ids(done_path) if args.resume else set()
@@ -408,7 +504,7 @@ def main() -> None:
 
         for i, job in enumerate(loader):
             LOGGER.info("[%d/%d] Processing %s (%d interface residues)", i + 1, len(dataset), job.pdb_id, len(job.targets))
-            written = process_job(job, force_field, device, args.mutation_batch_size, args.clash_threshold, writer, failure_writer)
+            written = process_job(job, force_field, device, args.mutation_batch_size, args.clash_threshold, tcr_chains, writer, failure_writer, out_f, fail_f)
             total_written += written
             out_f.flush()
             fail_f.flush()
