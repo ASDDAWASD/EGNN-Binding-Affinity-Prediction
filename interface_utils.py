@@ -23,7 +23,10 @@ The geometry is identical in both cases:
    atoms purely by integer residue number, so IMGT insertion codes (e.g.
    "111A", "111B") collapse onto the same integer position; we mirror that
    limitation deliberately so a mutation directive always refers to a residue
-   the downstream engine can actually distinguish.
+   the downstream engine can actually distinguish. The kept representative's
+   insertion code is preserved on ``MutationTarget.icode`` so the Rosetta tier
+   (which *can* address insertion codes) can target the exact residue in its
+   resfile, while MadraX keeps using the integer position.
 """
 
 from __future__ import annotations
@@ -79,6 +82,7 @@ class MutationTarget:
     # an analysis column so true contacts can be filtered downstream. -1.0 means
     # "not computed / no opposite-partner atoms present".
     min_interchain_dist: float = -1.0
+    icode: str = ""  # PDB insertion code of the kept residue ("" if none)
 
     @property
     def wt_aa_one(self) -> str:
@@ -186,11 +190,12 @@ def build_mutation_targets(
             continue
         chain_id = residue.get_parent().id
         resnum = residue.id[1]
+        icode = residue.id[2].strip()  # "" when there is no insertion code
         key = (chain_id, resnum)
         if key in seen:
             LOGGER.warning(
                 "Duplicate IMGT integer position %s%s (insertion code variant) "
-                "- downstream engines cannot distinguish these; keeping the first one only.",
+                "- MadraX cannot distinguish these; keeping the first one only.",
                 chain_id, resnum,
             )
             continue
@@ -204,6 +209,7 @@ def build_mutation_targets(
             wt_aa=wt_aa,
             distance_to_cdr=distance,
             min_interchain_dist=min_interchain,
+            icode=icode,
         )
     return sorted(seen.values(), key=lambda t: (t.chain, t.resnum))
 

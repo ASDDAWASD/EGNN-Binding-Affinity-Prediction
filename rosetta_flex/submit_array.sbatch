@@ -3,7 +3,7 @@
 #SBATCH --array=0-99%50          # OVERRIDE on submit: --array=0-<N-1> from jobs.csv (one task per row); %50 caps concurrency
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
-#SBATCH --time=08:00:00          # flex_ddG ~ a few hours/job at 35000 backrub trials x nstruct 35
+#SBATCH --time=01:00:00          # ~minutes/job at the cheap 3500 backrub trials x nstruct 1 settings (bump to 08:00:00 for full 35000 x 35)
 #SBATCH --output=rosetta_flex/logs/%A_%a.out
 #SBATCH --error=rosetta_flex/logs/%A_%a.err
 #
@@ -30,7 +30,7 @@ python rosetta_flex/run_flex_ddg.py \
   --job-index "${SLURM_ARRAY_TASK_ID}" \
   --rosetta_bin "${ROSETTA_SCRIPTS_BIN}" \
   --protocol_xml rosetta_flex/ddG_backrub.xml \
-  --backrub_trials "${BACKRUB_TRIALS:-35000}" \
-  --nstruct "${NSTRUCT:-35}" \
+  --backrub_trials "${BACKRUB_TRIALS:-3500}" \
+  --nstruct "${NSTRUCT:-1}" \
   --workdir "rosetta_flex/results/work/job_${SLURM_ARRAY_TASK_ID}" \
   --output "rosetta_flex/results/parts/job_${SLURM_ARRAY_TASK_ID}.csv"
