@@ -472,7 +472,7 @@ def main() -> None:
         LOGGER.error("No PDB files left to process. Exiting.")
         return
 
-    device = torch.device("cuda:4" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     if device.type != "cuda":
         LOGGER.warning("CUDA is not available; running on CPU. This will be far too slow for the full 1M-datapoint run.")
     LOGGER.info("Using device: %s", device)
