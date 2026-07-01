@@ -348,9 +348,6 @@ def _score_partner_group(
             # has already computed (a full structure can take many minutes).
             out_f.flush()
             fail_f.flush()
-            del complex_ddg, partner_ddg, binding
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
     finally:
         progress.close()
 
@@ -426,7 +423,7 @@ def main() -> None:
     parser.add_argument("--interface_radius", type=float, default=10.0, help="Angstrom radius defining the binding interface around CDR atoms.")
     parser.add_argument("--tcr_chains", type=str, default=",".join(DEFAULT_TCR_CHAINS), help="Comma-separated chain IDs for the TCR alpha/beta chains.")
     parser.add_argument("--complex_chains", type=str, default=",".join(DEFAULT_COMPLEX_CHAINS), help="Comma-separated chain IDs that make up the full TCR-pMHC complex.")
-    parser.add_argument("--mutation_batch_size", type=int, default=75, help="Number of point mutants scored per MadraX forward pass.")
+    parser.add_argument("--mutation_batch_size", type=int, default=200, help="Number of point mutants scored per MadraX forward pass.")
     parser.add_argument("--clash_threshold", type=float, default=1000.0, help="|ddG| (kcal/mol) above which a mutant is treated as a steric clash and filtered out.")
     parser.add_argument("--num_workers", type=int, default=max(1, (os.cpu_count() or 2) - 1), help="CPU worker processes for PDB parsing / interface detection.")
     parser.add_argument("--clean_dir", type=str, default=None, help="Directory to cache cleaned, chain-filtered PDBs. Defaults to <pdb_dir>/_clean.")
@@ -518,16 +515,6 @@ def main() -> None:
                     args.target_samples, total_written, i + 1, len(dataset),
                 )
                 break
-        with logging_redirect_tqdm():
-            for i, job in enumerate(tqdm(loader, total=len(dataset), desc="Structures", unit="pdb")):
-                LOGGER.info("[%d/%d] Processing %s (%d interface residues)", i + 1, len(dataset), job.pdb_id, len(job.targets))
-                written = process_job(job, force_field, device, args.mutation_batch_size, args.clash_threshold, writer, failure_writer)
-                total_written += written
-                out_f.flush()
-                fail_f.flush()
-                done_f.write(job.pdb_id + "\n")
-                done_f.flush()
-                LOGGER.info("%s -> %d ddG points (running total: %d)", job.pdb_id, written, total_written)
 
     LOGGER.info("Successfully generated %d synthetic ddG points.", total_written)
     LOGGER.info("Results written to %s (failures logged to %s).", output_csv, failure_log_path)
